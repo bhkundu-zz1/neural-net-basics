@@ -79,4 +79,4 @@ numbers, methodology, and caveats are in
 
 ## License
 
-Add a license before making this repository public.
+MIT — see [LICENSE](LICENSE).
