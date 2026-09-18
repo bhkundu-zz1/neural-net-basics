@@ -34,7 +34,7 @@ Default flags:
 |---|---|---|
 | `--ticker` | `NVDA` | Ticker to analyze |
 | `--lookback-days` | `2y` | Price history window (yfinance period string, e.g. `6mo`, `1y`, `5y`) |
-| `--weights` | `layer4_weights_rawreturn.pt` | Trained layer4 model to load |
+| `--weights` | `layer4_weights_nasdaq100.pt` | Trained layer4 model to load |
 | `--min-confidence` | `0.75` | Minimum calibrated confidence required to flag a trade (see [Validated operating point](#validated-operating-point)) |
 
 If `--weights` points to a file that doesn't exist, the pipeline still runs, but
@@ -92,6 +92,13 @@ significant, out-of-sample signal**:
 This is a real, non-trivial result for a research pipeline built from scratch
 with commodity price/volume data and a fairly small network.
 
+A second checkpoint, `layer4_weights_nasdaq100.pt` (the current default,
+trained across ~96 NASDAQ-100 tickers rather than 5), was later trained and
+confidence-swept the same way — see [Validated operating
+point](#validated-operating-point) below for its numbers. The frequency/
+quality tradeoff pattern and the 0.75 operating point both held up on this
+much larger, different ticker universe.
+
 ### The limits (read these before trusting any output)
 
 - **The edge is thin.** Average captured P&L per trade is roughly
@@ -127,24 +134,59 @@ look-ahead bias) — not as a system to size real capital against today.
 
 ## Validated operating point
 
-The `trade_glue.py` confidence → win/loss lookup was calibrated empirically
-(`calibration_table.json`, built by `build_calibration_table.py` from the same
-11 walk-forward folds). A threshold sweep found `--min-confidence 0.75`
-produces the best-validated balance of trade frequency and quality:
+The `trade_glue.py` confidence → win/loss lookup is calibrated empirically
+(`calibration_table.json`). A threshold sweep at `--min-confidence` values
+from 0.65 to 0.85 was run against **`layer4_weights_nasdaq100.pt`** (the
+current default weights, trained across ~96 NASDAQ-100 tickers) via
+`backtest_layer4.py`, pooling roughly 30,880 test-set signals across ~10
+years:
+
+| `--min-confidence` | Trades taken | Win rate | Avg P&L/trade |
+|---|---|---|---|
+| 0.65 | 10,585 (34.3%) | 74.8% | 0.0646% |
+| 0.70 | 6,608 (21.4%) | 78.8% | 0.0812% |
+| **0.75 (default)** | **3,754 (12.2%)** | **82.2%** | **0.1002%** |
+| 0.80 | 2,041 (6.6%) | 85.2% | 0.1273% |
+| 0.85 | 1,057 (3.4%) | 88.2% | 0.1650% |
+
+As before, higher thresholds trade less often but at higher measured quality
+— win rate and average P&L rise monotonically with the threshold. There is no
+single "correct" choice; it's a frequency/quality tradeoff, and it is
+tempting to chase the highest win rate (0.85's 88.2%). Two reasons that's the
+wrong read of this table:
+
+- **Sample size collapses at the top end.** 1,057 trades pooled across 96
+  tickers over ~10 years is ~11 trades per ticker — not enough to trust an
+  88.2% win rate as a stable estimate. 3,754 trades (0.75) is a much sturdier
+  base for the win-rate estimate to rest on.
+- **Total captured edge falls as the threshold rises**, even though
+  per-trade quality rises: summing per-trade P&L (non-compounded) across all
+  taken trades gives 683.8% at 0.65 down to 174.4% at 0.85. Since this
+  strategy's edge is thin and depends on volume to be reliable (per the Law of
+  Large Numbers — see the project's foundational-concepts notes), giving up
+  ~2,700 trades to gain 0.06 points of average P&L is not obviously a good
+  trade.
+
+**0.75 remains the default** — the same operating point validated for the
+prior rawreturn model, now replicated on a different, much larger ticker
+universe, and the last point on the curve with a defensible sample size.
+
+### Prior generation: the rawreturn model (4-ticker sweep)
+
+The original validation, before the nasdaq100 checkpoint existed, used
+`layer4_weights_rawreturn.pt` (trained on NVDA/ANET/INTC/M/SPCX) and a smaller
+sweep pooled across 4 tickers:
 
 | `--min-confidence` | Trades (~10y, 4 tickers) | Win rate | Avg P&L/trade |
 |---|---|---|---|
 | 0.65 | 527 | 68.9% | 0.068% |
 | 0.70 | 343 | 73.5% | 0.087% |
-| **0.75 (default)** | **189** | **80.4%** | **0.117%** |
+| **0.75** | **189** | **80.4%** | **0.117%** |
 | 0.80 | 100 | 81.0% | 0.136% |
 | 0.85 | 38 | 81.6% | 0.151% |
 
-Higher thresholds trade less often but at higher measured quality — win rate
-and average P&L rise monotonically with the threshold. There is no single
-"correct" choice; it's a frequency/quality tradeoff. 0.75 is the point where
-trade count is still large enough (189 over ~9 years pooled across 4 tickers)
-to trust the win-rate estimate, while capturing most of the quality gain.
+This table is kept for historical reference; `run_pipeline.py` and
+`run_portfolio.py` now default to the nasdaq100 weights and the sweep above.
 
 ## Re-running the underlying research
 
@@ -161,7 +203,7 @@ The scripts behind the numbers above, if you want to reproduce or extend them:
 Example: testing the trained model on a new, never-seen ticker:
 
 ```bash
-python backtest_layer4.py --weights layer4_weights_rawreturn.pt \
+python backtest_layer4.py --weights layer4_weights_nasdaq100.pt \
     --tickers TICKER --evaluate-all --min-confidence 0.75
 ```
 

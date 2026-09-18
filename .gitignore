@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 *.log
+
+# Generated reports (regenerate via run_pipeline.py / run_portfolio.py)
+portfolio_report.*
+ofx_portfolio_report.*
+
+# Personal portfolio data
+data/
