@@ -24,23 +24,37 @@ python run_portfolio.py --csv my_holdings.csv
 
 Key flags:
 - `--weights` — layer4 checkpoint to score every position with (default:
-  `layer4_weights_nasdaq100.pt`).
+  `layer4_weights_expanded.pt`).
 - `--min-confidence` — confidence threshold for `should_trade` (default
-  `0.75`, validated via a confidence sweep on the nasdaq100 checkpoint —
-  see `docs/pipeline_guide.md`'s "Validated operating point" section for the
-  full table and reasoning. If you pass a different `--weights` file, this
-  threshold hasn't been separately validated for it).
+  `0.75`, validated via a walk-forward backtest on out-of-sample tickers
+  against the expanded checkpoint — see `docs/pipeline_guide.md`'s
+  "Validated operating point" section for the full numbers and reasoning.
+  If you pass a different `--weights` file, this threshold hasn't been
+  separately validated for it).
 - `--max-portfolio-risk` — cap on total recommended BUY exposure as a fraction
   of capital (default `1.0` = 100%). If multiple positions clear the
   confidence bar simultaneously, their Kelly-sized BUY recommendations are
   scaled down proportionally to fit under this cap.
 - `--output` — where to write the JSON report (CSV and Markdown reports are
   also written alongside it, same basename).
+- `--no-explain` — skip the LLM-generated portfolio summary (no network call).
+
+## LLM-generated portfolio summary
+
+If `.env` is configured (see `docs/pipeline_guide.md`'s "LLM-generated
+explanations" section and `llm_narration.py`), the report opens with one
+LLM-generated paragraph summarizing the whole scan (how many Buy/Sell/Hold,
+which out-of-sample tickers have an active signal, whether the exposure cap
+triggered). This is a single call for the whole portfolio, not one per
+position — with 50+ positions, per-position LLM calls would be far too slow.
+As with the single-ticker pipeline, the LLM only narrates the numbers it's
+given; it cannot change any verdict. If the LLM is unavailable or
+`--no-explain` is passed, a plain templated summary is used instead.
 
 ## Caveats (read before trusting any output)
 
 - **Out-of-universe tickers are scored anyway, not skipped.** A checkpoint is
-  trained on a specific ticker list (e.g. the nasdaq100 checkpoint's ~96
+  trained on a specific ticker list (e.g. the expanded checkpoint's 124
   names). Nothing stops you from running the pipeline on a ticker the model
   never saw in training — the report flags these as "out-of-sample /
   unvalidated for this model" in the Notes column, but still produces a
@@ -69,6 +83,12 @@ Key flags:
 
 ```
 === Portfolio pipeline report ===
+
+The scan produced one actionable Sell (TTD) and seven neutral Hold positions
+(AMD, ANET, BN, MBGL, NVDA, SPGI, TSLA), with a live-priced portfolio value of
+$433,032.22. No Buy signals appeared, so BUY exposure stayed at 0.00% both
+before and after the 100% cap. No out-of-sample tickers received a Buy or
+Sell recommendation.
 
 Symbol      Shares     Price         Value Direction Action   Size% In-univ?  Notes
 ------------------------------------------------------------------------------------

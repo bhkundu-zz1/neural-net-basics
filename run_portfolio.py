@@ -24,12 +24,20 @@ IMPORTANT CAVEATS — see docs/portfolio_guide.md for the full picture:
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 
+import llm_narration
 from pipeline_core import load_model, run_pipeline_for_ticker
 from portfolio_glue import apply_portfolio_exposure_cap, load_portfolio_csv, map_action
 
-DEFAULT_WEIGHTS = "layer4_weights_nasdaq100.pt"
+# See run_pipeline.py for why: avoids crashing on characters (em-dashes,
+# LLM-generated punctuation, etc.) that a Windows console's default codepage
+# can't encode.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+DEFAULT_WEIGHTS = "layer4_weights_expanded.pt"
 DEFAULT_MIN_CONFIDENCE = 0.75
 DEFAULT_MAX_PORTFOLIO_RISK = 1.0
 
@@ -66,6 +74,11 @@ def parse_args():
         default="portfolio_report.json",
         help="Path to write the machine-readable JSON report (default: portfolio_report.json). "
         "A CSV report is also written alongside it with the same basename.",
+    )
+    parser.add_argument(
+        "--no-explain",
+        action="store_true",
+        help="Skip the LLM-generated portfolio summary (no network call).",
     )
     return parser.parse_args()
 
@@ -151,8 +164,37 @@ def note_for(result: dict) -> str:
     return "; ".join(notes)
 
 
-def print_report(results, errors, summary):
+def fallback_portfolio_summary(results, summary) -> str:
+    """Plain templated summary used when the LLM is unavailable or skipped."""
+    counts = {"Buy": 0, "Sell": 0, "Hold": 0}
+    for r in results:
+        counts[r["action"]] += 1
+    flagged = [r["ticker"] for r in results if r["action"] in ("Buy", "Sell") and not r["in_training_universe"]]
+
+    parts = [
+        f"{len(results)} position(s) scanned: {counts['Buy']} Buy, {counts['Sell']} Sell, "
+        f"{counts['Hold']} Hold."
+    ]
+    if flagged:
+        parts.append(f"Active signals on out-of-sample tickers (extra scrutiny warranted): {', '.join(flagged)}.")
+    if summary["total_buy_exposure_before_cap"] > summary["max_portfolio_risk"]:
+        parts.append(
+            f"BUY exposure before capping ({summary['total_buy_exposure_before_cap']*100:.1f}%) exceeded "
+            f"the {summary['max_portfolio_risk']*100:.0f}% cap and was scaled down."
+        )
+    return " ".join(parts)
+
+
+def print_report(results, errors, summary, explain=True):
     print("=== Portfolio pipeline report ===\n")
+
+    if results:
+        narration = llm_narration.narrate_portfolio(results, summary) if explain else None
+        if narration is None:
+            narration = fallback_portfolio_summary(results, summary)
+        print(narration)
+        print()
+
     header = f"{'Symbol':<8}{'Shares':>10}{'Price':>10}{'Value':>14}{'Direction':>10}{'Action':>7}{'Size%':>8}{'In-univ?':>9}  Notes"
     print(header)
     print("-" * len(header))
@@ -255,7 +297,7 @@ def write_reports(results, errors, summary, output_path):
 def main():
     args = parse_args()
     results, errors, summary = run_portfolio(args)
-    print_report(results, errors, summary)
+    print_report(results, errors, summary, explain=not args.no_explain)
     write_reports(results, errors, summary, args.output)
 
 

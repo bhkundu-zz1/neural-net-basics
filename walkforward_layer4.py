@@ -36,6 +36,7 @@ from scipy import stats
 from layer4 import QuantEdgeNet
 from train_layer4 import fetch_prices_and_factors, build_dataset_for_ticker
 from backtest_layer4 import compute_trades
+from fold_checkpoint import resolve_fold_result
 
 
 def build_full_dataset(tickers, lookback_days, forward_days, label_mode, up_threshold, down_threshold):
@@ -248,6 +249,17 @@ def main():
     print(f"\n{len(folds)} rolling folds: train={args.train_years}y, test={args.test_months}mo, "
           f"step={args.step_months}mo\n")
 
+    run_config = {
+        "tickers": ",".join(sorted(tickers)), "lookback_days": args.lookback_days,
+        "forward_days": args.forward_days, "label_mode": args.label_mode,
+        "up_threshold": args.up_threshold, "down_threshold": args.down_threshold,
+        "train_years": args.train_years, "test_months": args.test_months,
+        "step_months": args.step_months, "min_confidence": args.min_confidence,
+        "hidden_sizes": args.hidden_sizes, "dropout": args.dropout,
+        "weight_decay": args.weight_decay, "lr": args.lr,
+        "batch_size": args.batch_size, "epochs": args.epochs,
+    }
+
     fold_results = []
     for i, (train_start, train_end, test_end) in enumerate(folds, 1):
         sliced = slice_fold(per_ticker, train_start, train_end, test_end)
@@ -260,38 +272,46 @@ def main():
             print(f"Fold {i}: train={len(y_train)}, test={n_test} — too small, skipping.")
             continue
 
-        net, mean, std = train_fold(
-            x_train, y_train, hidden_sizes, args.dropout, args.weight_decay,
-            args.lr, args.batch_size, args.epochs,
-        )
-        accuracy, n_signals, n_taken, win_rate, avg_pnl, pnl, _all_trades = evaluate_fold(
-            net, mean, std, test_records, args.min_confidence
-        )
+        def compute_this_fold(x_train=x_train, y_train=y_train, test_records=test_records, i=i):
+            net, mean, std = train_fold(
+                x_train, y_train, hidden_sizes, args.dropout, args.weight_decay,
+                args.lr, args.batch_size, args.epochs,
+            )
+            accuracy, n_signals, n_taken, win_rate, avg_pnl, pnl, _all_trades = evaluate_fold(
+                net, mean, std, test_records, args.min_confidence
+            )
+
+            if n_taken >= 5:
+                t_stat, p_value = stats.ttest_1samp(pnl, 0.0)
+                ci_low, ci_high = np.percentile(
+                    [np.random.default_rng(i).choice(pnl, size=len(pnl), replace=True).mean() for _ in range(2000)],
+                    [2.5, 97.5],
+                )
+                ci_excludes_zero = not (ci_low <= 0 <= ci_high)
+            else:
+                ci_low, ci_high, ci_excludes_zero = None, None, None
+
+            return {
+                "fold": i, "n_train": len(y_train), "accuracy": accuracy, "n_test": n_test,
+                "n_taken": n_taken, "win_rate": win_rate, "avg_pnl": avg_pnl,
+                "ci_low": ci_low, "ci_high": ci_high, "ci_excludes_zero": ci_excludes_zero,
+            }
+
+        result, from_cache = resolve_fold_result("walkforward", run_config, i, compute_this_fold)
 
         train_start_s = str(train_start)[:10]
         test_start_s = str(train_end)[:10]
         test_end_s = str(test_end)[:10]
-
-        if n_taken >= 5:
-            t_stat, p_value = stats.ttest_1samp(pnl, 0.0)
-            ci_low, ci_high = np.percentile(
-                [np.random.default_rng(i).choice(pnl, size=len(pnl), replace=True).mean() for _ in range(2000)],
-                [2.5, 97.5],
-            )
-            ci_excludes_zero = not (ci_low <= 0 <= ci_high)
-        else:
-            p_value, ci_low, ci_high, ci_excludes_zero = None, None, None, None
+        cache_note = " (from checkpoint)" if from_cache else ""
+        win_rate_s = f"{result['win_rate']:.1%}" if result["win_rate"] is not None else "n/a"
+        avg_pnl_s = f"{result['avg_pnl']:.4%}" if result["avg_pnl"] is not None else "n/a"
 
         print(f"Fold {i:2d}  train=[{train_start_s}..{test_start_s})  test=[{test_start_s}..{test_end_s})  "
-              f"n_train={len(y_train):5d}  n_test={n_test:4d}  accuracy={accuracy:.1%}  "
-              f"trades_taken={n_taken:3d}  win_rate={f'{win_rate:.1%}' if win_rate is not None else 'n/a':>6}  "
-              f"avg_pnl={f'{avg_pnl:.4%}' if avg_pnl is not None else 'n/a':>9}  "
-              f"CI_excl_0={ci_excludes_zero}")
+              f"n_train={result['n_train']:5d}  n_test={result['n_test']:4d}  accuracy={result['accuracy']:.1%}  "
+              f"trades_taken={result['n_taken']:3d}  win_rate={win_rate_s:>6}  avg_pnl={avg_pnl_s:>9}  "
+              f"CI_excl_0={result['ci_excludes_zero']}{cache_note}")
 
-        fold_results.append({
-            "fold": i, "accuracy": accuracy, "n_test": n_test, "n_taken": n_taken,
-            "win_rate": win_rate, "avg_pnl": avg_pnl, "ci_excludes_zero": ci_excludes_zero,
-        })
+        fold_results.append(result)
 
     if not fold_results:
         print("\nNo folds produced results — check window sizes vs available data.")
