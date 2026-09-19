@@ -19,3 +19,11 @@ data/
 
 # Superseded/one-off run outputs, kept locally for reference but not tracked
 old/
+
+# Node/frontend
+node_modules/
+dist/
+
+# Playwright artifacts
+regression-test/test-results/
+regression-test/playwright-report/

@@ -1,0 +1,12 @@
+{
+  "name": "vibe-regression-test",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright end-to-end regression scenarios for the paper-trading web app.",
+  "scripts": {
+    "test": "playwright test playwright/"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
