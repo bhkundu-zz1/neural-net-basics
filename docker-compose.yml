@@ -1,0 +1,51 @@
+services:
+  couchdb:
+    image: couchdb:3
+    container_name: paper-trading-couchdb
+    restart: unless-stopped
+    ports:
+      # Host 5985, not the default 5984 — that port is already used by a
+      # separate, unrelated standalone CouchDB container on this machine.
+      - "5985:5984"
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER:-admin}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:-changeme}
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: paper-trading-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Service name "couchdb", container-internal port 5984 — this is the
+      # Docker network's own DNS, unrelated to the host-side 5985 mapping
+      # above. use_basic_auth is set in couch_client.py itself, not here.
+      COUCHDB_URL: http://couchdb:5984
+      COUCHDB_USER: ${COUCHDB_USER:-admin}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:-changeme}
+    depends_on:
+      - couchdb
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: paper-trading-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      # The browser (not the frontend container) calls this URL directly,
+      # so it must be the host-published backend port, not the Docker
+      # network's internal "backend" service name.
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  couchdb-data:
