@@ -59,6 +59,21 @@ To scan every position in a portfolio CSV at once instead of one ticker at a
 time, use `run_portfolio.py` — see
 [docs/portfolio_guide.md](docs/portfolio_guide.md).
 
+## Paper-trading web app
+
+A separate React + FastAPI + CouchDB app (`frontend/`, `backend/`) wraps
+this same pipeline to simulate placing and tracking paper trades over time
+— get a live signal, place a simulated trade, and later resolve whether it
+won or lost against real trading-day price data. See
+[docs/architecture.md](docs/architecture.md) for the full design.
+
+Start everything (CouchDB, backend, frontend) with Docker:
+```bash
+cp .env.example .env   # fill in COUCHDB_USER / COUCHDB_PASSWORD
+docker compose up -d   # http://localhost:5173
+docker compose down    # stop (keeps trade data); add -v to also wipe it
+```
+
 ## Repository layout
 
 ```
@@ -76,10 +91,17 @@ build_calibration_table.py     Builds the empirical confidence→win/loss lookup
 fold_checkpoint.py             Per-fold checkpointing so a crashed walk-forward/calibration
                                 run resumes instead of redoing completed folds
 
-tests/                         pytest coverage for the modules above
+backend/                       FastAPI paper-trading API (wraps pipeline_core, persists to CouchDB)
+frontend/                      React (Vite) paper-trading UI
+regression-test/               Playwright end-to-end scenarios for the paper-trading app
+docker-compose.yml             One-command start/stop for frontend + backend + CouchDB
+
+tests/                         pytest coverage for the core pipeline modules
 old/                            Superseded calibration tables and one-off run logs (gitignored)
 docs/pipeline_guide.md         Full usage guide + research findings and their limits
 docs/portfolio_guide.md        Guide for run_portfolio.py
+docs/architecture.md           Paper-trading web app design, FDE setup guide, NFRs
+docs/ADR/                       Architecture decision records for the web app
 ```
 
 ## The research finding, in one paragraph

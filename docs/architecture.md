@@ -22,8 +22,17 @@ FastAPI backend (:8000)
       |        yfinance (live price/volume data)
       |
       v
-CouchDB (:5984) -- paper_trades database
+CouchDB -- paper_trades database
+  (:5984 for a manually-run instance; :5985 on the host when started via
+   `docker compose`, to avoid colliding with any other CouchDB already
+   running — see the FDE section below. The backend always talks to
+   CouchDB's container-internal :5984 regardless of the host-side mapping.)
 ```
+
+All three pieces also run as Docker containers via `docker-compose.yml` at
+the repo root — see the FDE section's "Recommended: Docker Compose"
+checklist for the one-command `docker compose up -d` / `docker compose
+down` start/stop workflow.
 
 ## Data flow
 
@@ -43,7 +52,34 @@ CouchDB (:5984) -- paper_trades database
 
 ### Day-1 setup checklist
 
-1. Start CouchDB — either Docker:
+**Recommended: Docker Compose (all three services, one command)**
+
+1. Copy `.env.example` to `.env` (repo root) and fill in `COUCHDB_USER` /
+   `COUCHDB_PASSWORD` — any values are fine for local dev, `docker compose`
+   uses them to initialize the containerized CouchDB and to authenticate
+   the backend against it. Docker Compose reads `.env` automatically; no
+   need to export these manually.
+2. `docker compose up -d` (repo root) — builds and starts all three
+   containers:
+   - `paper-trading-couchdb` — CouchDB, published on **host port 5985**
+     (not the default 5984, to avoid colliding with any other CouchDB
+     instance already running on this machine), with a named volume
+     (`vibe_couchdb-data`) so trade data survives `docker compose down`.
+   - `paper-trading-backend` — FastAPI, published on host port 8000,
+     connects to CouchDB over the Docker network as `http://couchdb:5984`
+     (the *container-internal* port, unrelated to the host's 5985 mapping).
+   - `paper-trading-frontend` — the Vite dev server, published on host
+     port 5173, pointed at `http://localhost:8000` for API calls (the
+     browser calls this directly, so it must be the host-published port).
+3. Open `http://localhost:5173`. `docker compose down` stops and removes
+   the containers (keeps the CouchDB volume); `docker compose up -d`
+   starts them again — this is the intended start/stop workflow.
+4. First build pulls a fairly large backend image (~6GB, mostly `torch`);
+   subsequent starts are fast since the image is cached.
+
+**Alternative: run each piece directly (no Docker)**
+
+1. Start CouchDB — either Docker on its own:
    ```bash
    docker run -d --name paper-trading-couchdb -p 5984:5984 \
      -e COUCHDB_USER=admin -e COUCHDB_PASSWORD=changeme couchdb:3
@@ -97,10 +133,27 @@ CouchDB (:5984) -- paper_trades database
   current signal doesn't clear the confidence/cost bar (`should_trade` is
   False). The response body includes the full signal so the caller can see
   why.
+- **Docker Compose port 5985 conflicts**: the compose CouchDB service is
+  deliberately published on host port 5985, not the CouchDB-standard 5984,
+  specifically to avoid colliding with any other CouchDB container already
+  running on the host. If 5985 is also taken, change the host-side mapping
+  in `docker-compose.yml`'s `couchdb.ports` (only the host side — leave the
+  container-internal `5984` alone, since that's what the `backend` service
+  connects to over the Docker network).
+- **`docker compose up` fails on first build**: the backend image installs
+  the full `requirements.txt` including `torch`, so the first build can
+  take several minutes and produces a large (~6GB) image — this is
+  expected, not a hang. Subsequent starts reuse the cached image and are
+  fast.
 
 ### Resetting local state
 
-Drop and recreate the trades database:
+**Docker Compose**: `docker compose down -v` removes the CouchDB volume
+along with the containers (plain `docker compose down` keeps the volume —
+use `-v` specifically to wipe trade data). `docker compose up -d` after
+either recreates everything from scratch.
+
+**Manual setup**: drop and recreate the trades database directly:
 ```bash
 curl -X DELETE http://<user>:<password>@localhost:5984/paper_trades
 ```
