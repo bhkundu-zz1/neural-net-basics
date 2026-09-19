@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+torch
+yfinance
+python-dotenv
+requests
+pytest

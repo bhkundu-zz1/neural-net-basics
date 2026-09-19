@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.log
+.env
 
 # Generated reports (regenerate via run_pipeline.py / run_portfolio.py)
 portfolio_report.*
@@ -9,3 +10,12 @@ ofx_portfolio_report.*
 
 # Personal portfolio data
 data/
+
+# Per-ticker cache for resumable train_layer4.py runs
+.train_cache/
+
+# Per-fold cache for resumable walkforward_layer4.py / build_calibration_table.py runs
+.fold_checkpoints/
+
+# Superseded/one-off run outputs, kept locally for reference but not tracked
+old/

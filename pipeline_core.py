@@ -90,6 +90,40 @@ def run_pipeline_for_ticker(
     # Layer 1: signal detection
     signal = detect_signal(prices)
 
+    if signal["regime"] == "undefined":
+        # Degenerate instrument (e.g. a money market fund pinned at a flat
+        # price): the Hurst exponent, autocorrelation, and z-score are all
+        # undefined for a (near-)zero-variance series, so layers 2-5 would be
+        # computing on garbage. Report Hold honestly instead of running the
+        # neural net on a meaningless feature vector.
+        return {
+            "ticker": ticker,
+            "shares": shares,
+            "last_price": last_price,
+            "position_value": shares * last_price,
+            "n_price_points": len(prices),
+            "n_factor_rows": len(factor_returns),
+            "signal": signal,
+            "factor_result": None,
+            "regime_probs": {"dominant_regime": "undefined"},
+            "edge_probs": None,
+            "edge_label": "SKIPPED — no meaningful price variance (e.g. a flat-priced "
+            "instrument like a money market fund); layers 2-5 were not run",
+            "trained_tickers": None,
+            "trade_inputs": {"direction": "flat", "calibrated": False},
+            "direction": "flat",
+            "win_probability": 0.0,
+            "position_size": 0.0,
+            "execution_cost": 0.0,
+            "edge_bps": 0.0,
+            "execution_cost_bps": 0.0,
+            "clears_cost": False,
+            "clears_confidence": False,
+            "should_trade": False,
+            "net": None,
+            "checkpoint": None,
+        }
+
     # Layer 2: factor decomposition
     factor_result = factor_decompose(returns, factor_returns)[ticker]
 

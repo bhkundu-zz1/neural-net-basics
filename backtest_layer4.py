@@ -140,6 +140,7 @@ def compute_trades(ticker, net, mean, std, prices, features, fwd_returns, entry_
             "actual_return": actual_return,
             "directional_return": directional_return,
             "pnl_pct": pnl_pct,
+            "calibrated": trade_inputs["calibrated"],
         })
 
     return trades
@@ -222,6 +223,15 @@ def summarize(trades: list[dict]):
     for ticker, pnls in by_ticker.items():
         pnls = np.array(pnls)
         print(f"  {ticker}: n={len(pnls)}  win_rate={np.mean(pnls > 0):.1%}  avg_pnl={pnls.mean():.4%}")
+
+    n_calibrated = sum(1 for t in taken if t["calibrated"])
+    print(f"\nTaken trades scored via the empirically calibrated glue "
+          f"(calibration_table.json): {n_calibrated}/{n_taken} ({n_calibrated / n_taken:.1%})")
+    if n_calibrated < n_taken:
+        print("=== IMPORTANT: some taken trades fell back to the placeholder layer4->layer5 glue ===")
+        print("(no calibration_table.json bucket covered their confidence level) — those trades'")
+        print("win_loss_ratio/edge_bps came from hand-picked heuristics, not empirical history.")
+        print("See build_calibration_table.py to extend coverage.")
 
 
 def parse_args():
@@ -307,11 +317,6 @@ def main():
         return
 
     summarize(all_trades)
-
-    print("\n=== IMPORTANT: this backtest uses a placeholder layer4->layer5 glue (trade_glue.py) ===")
-    print("that was never calibrated or validated. A positive result here is encouraging but")
-    print("not proof of a tradeable edge — the glue's win_loss_ratio/edge_bps heuristics could")
-    print("themselves be flattering or penalizing the model in ways unrelated to its real skill.")
 
 
 if __name__ == "__main__":

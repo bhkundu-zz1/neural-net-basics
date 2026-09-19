@@ -42,6 +42,9 @@ Usage:
 """
 
 import argparse
+import hashlib
+import os
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -59,35 +62,105 @@ MIN_FACTOR_WINDOW = 20  # floor for tickers with limited history
 FEATURE_LOOKBACK = 20   # matches build_feature_vector's tail(20) usage in layer1/layer4
 LONG, SHORT, FLAT = 0, 1, 2
 
+CACHE_DIR = ".train_cache"
+
+
+def _cache_path(kind: str, ticker: str, key_parts: tuple) -> str:
+    """
+    kind: 'prices' or 'dataset'. key_parts identifies everything that affects the
+    cached content (lookback for prices; lookback+forward_days+thresholds+label_mode
+    for datasets) so a resume never silently reuses a cache built under different
+    settings — a mismatched key just produces a different filename (cache miss),
+    not stale data.
+    """
+    key = "|".join(str(p) for p in key_parts)
+    digest = hashlib.sha1(key.encode()).hexdigest()[:10]
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"{kind}_{ticker}_{digest}.pkl")
+
+
+def _load_cache(path: str):
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+
+def _save_cache(path: str, obj) -> None:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        pickle.dump(obj, f)
+    os.replace(tmp_path, path)
+
+
+def _fetch_factor_returns(lookback: str) -> pd.DataFrame:
+    """Downloads/caches the shared factor proxies (SPY/IWM/IWD/MTUM) as one small batch."""
+    cache_path = _cache_path("factors", "SHARED", (lookback,))
+    cached = _load_cache(cache_path)
+    if cached is not None:
+        return cached
+
+    data = yf.download(["SPY", "IWM", "IWD", "MTUM"], period=lookback, auto_adjust=True, progress=False)
+    factor_prices_full = data["Close"][["SPY", "IWM", "IWD", "MTUM"]].dropna()
+    factor_returns_full = factor_prices_full.pct_change().dropna()
+    factor_returns_full.columns = ["market", "size", "value", "momentum"]
+    _save_cache(cache_path, factor_returns_full)
+    return factor_returns_full
+
 
 def fetch_prices_and_factors(tickers: list[str], lookback: str) -> tuple[dict, dict, dict]:
     """
-    Downloads prices/volume for each ticker and shared factor proxies (SPY/IWM/IWD/MTUM).
-    Each ticker's series is aligned only against dates where BOTH the ticker and the
-    factor proxies have data — tickers with a later start date (e.g. a recent listing)
-    naturally get a shorter, more recent history rather than being dropped or padded.
+    Downloads prices/volume for each ticker (one yfinance call per ticker, so a
+    failure or a bad symbol only affects that ticker, not the whole batch) and the
+    shared factor proxies (SPY/IWM/IWD/MTUM, fetched once). Each ticker's series is
+    aligned only against dates where BOTH the ticker and the factor proxies have
+    data — tickers with a later start date (e.g. a recent listing) naturally get a
+    shorter, more recent history rather than being dropped or padded.
+
+    Per-ticker results are cached to disk (see CACHE_DIR) keyed by ticker+lookback,
+    so re-running after a crash skips tickers already fetched instead of
+    re-downloading everything.
+
     Returns per-ticker dicts: {ticker: pd.Series prices}, {ticker: pd.Series volume},
     {ticker: pd.DataFrame factor_returns}.
     """
-    all_symbols = list(dict.fromkeys([*tickers, "SPY", "IWM", "IWD", "MTUM"]))
-    data = yf.download(all_symbols, period=lookback, auto_adjust=True, progress=False)
-    close = data["Close"]
-    volume = data["Volume"]
-
-    factor_prices_full = close[["SPY", "IWM", "IWD", "MTUM"]].dropna()
-    factor_returns_full = factor_prices_full.pct_change().dropna()
-    factor_returns_full.columns = ["market", "size", "value", "momentum"]
+    factor_returns_full = _fetch_factor_returns(lookback)
 
     prices_by_ticker, volume_by_ticker, factors_by_ticker = {}, {}, {}
+    failed = []
     for ticker in tickers:
-        ticker_close = close[ticker].dropna()
+        cache_path = _cache_path("prices", ticker, (lookback,))
+        cached = _load_cache(cache_path)
+        if cached is not None:
+            ticker_close, ticker_volume = cached
+            print(f"  {ticker}: loaded from cache.")
+        else:
+            try:
+                data = yf.download(ticker, period=lookback, auto_adjust=True, progress=False)
+                if data.empty:
+                    raise ValueError("no data returned")
+                ticker_close = data["Close"][ticker] if isinstance(data["Close"], pd.DataFrame) else data["Close"]
+                ticker_volume = data["Volume"][ticker] if isinstance(data["Volume"], pd.DataFrame) else data["Volume"]
+                ticker_close = ticker_close.dropna()
+                ticker_volume = ticker_volume.reindex(ticker_close.index)
+                _save_cache(cache_path, (ticker_close, ticker_volume))
+            except Exception as exc:
+                print(f"  WARNING: {ticker} failed to download ({exc}) — skipping.")
+                failed.append(ticker)
+                continue
+
         common_index = ticker_close.index.intersection(factor_returns_full.index)
         if len(common_index) < MIN_FACTOR_WINDOW + FEATURE_LOOKBACK:
             print(f"  WARNING: {ticker} has only {len(common_index)} usable overlapping days — skipping.")
             continue
         prices_by_ticker[ticker] = ticker_close.loc[ticker_close.index.union(common_index)].sort_index()
-        volume_by_ticker[ticker] = volume[ticker].reindex(prices_by_ticker[ticker].index)
+        volume_by_ticker[ticker] = ticker_volume.reindex(prices_by_ticker[ticker].index)
         factors_by_ticker[ticker] = factor_returns_full.loc[common_index]
+
+    if failed:
+        print(f"\n  {len(failed)} ticker(s) failed to download and were skipped: {', '.join(failed)}")
+        print(f"  Re-run the same command to retry only the missing ones — tickers already "
+              f"cached in {CACHE_DIR}/ will be loaded instantly instead of re-downloaded.")
 
     return prices_by_ticker, volume_by_ticker, factors_by_ticker
 
@@ -219,28 +292,45 @@ def build_pooled_dataset(
     up_threshold: float,
     down_threshold: float,
     label_mode: str = "risk_adjusted",
+    lookback: str = "",
 ):
     """
     Builds a dataset per ticker, splits each chronologically, then pools the
     splits across tickers. Splitting before pooling ensures a ticker with a
     shorter or more recent history doesn't leak entirely into one split.
+
+    Each ticker's built dataset (the slow part — recomputes rolling factor
+    regressions and signal detection at every day) is cached to disk keyed by
+    ticker + every param that affects its contents, so re-running after a crash
+    skips tickers whose dataset was already built.
     """
     train_x, train_y, val_x, val_y, test_x, test_y = [], [], [], [], [], []
     summary = []
+    dataset_key = (lookback, forward_days, up_threshold, down_threshold, label_mode)
 
     for ticker in tickers:
         if ticker not in prices_by_ticker:
             continue
-        features, labels, dates, factor_window, _fwd_returns, _entry_prices = build_dataset_for_ticker(
-            ticker,
-            prices_by_ticker[ticker],
-            volume_by_ticker[ticker],
-            factors_by_ticker[ticker],
-            forward_days,
-            up_threshold,
-            down_threshold,
-            label_mode,
-        )
+
+        cache_path = _cache_path("dataset", ticker, dataset_key)
+        cached = _load_cache(cache_path)
+        if cached is not None:
+            print(f"  {ticker}: dataset loaded from cache.")
+            features, labels, dates, factor_window, _fwd_returns, _entry_prices = cached
+        else:
+            built = build_dataset_for_ticker(
+                ticker,
+                prices_by_ticker[ticker],
+                volume_by_ticker[ticker],
+                factors_by_ticker[ticker],
+                forward_days,
+                up_threshold,
+                down_threshold,
+                label_mode,
+            )
+            _save_cache(cache_path, built)
+            features, labels, dates, factor_window, _fwd_returns, _entry_prices = built
+
         if len(labels) == 0:
             print(f"  {ticker}: produced 0 samples — skipping.")
             continue
@@ -392,6 +482,11 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="L2 regularization strength")
     parser.add_argument("--patience", type=int, default=10, help="Early-stopping patience in epochs")
     parser.add_argument("--output", default="layer4_weights.pt", help="Path to save trained weights + norm stats")
+    parser.add_argument(
+        "--fresh-cache", action="store_true",
+        help=f"Ignore any existing per-ticker cache in {CACHE_DIR}/ and rebuild everything from "
+        f"scratch (normally a re-run after a crash reuses cached tickers automatically).",
+    )
     return parser.parse_args()
 
 
@@ -399,7 +494,14 @@ def main():
     args = parse_args()
     tickers = [t.strip().upper() for t in args.tickers.split(",")]
 
+    if args.fresh_cache and os.path.isdir(CACHE_DIR):
+        import shutil
+        shutil.rmtree(CACHE_DIR)
+        print(f"--fresh-cache: cleared {CACHE_DIR}/")
+
     print(f"Fetching {args.lookback_days} of data for: {', '.join(tickers)}...")
+    print(f"(Per-ticker results are cached in {CACHE_DIR}/ — if this run fails partway, just "
+          f"re-run the same command and already-fetched/-built tickers will be skipped.)")
     prices_by_ticker, volume_by_ticker, factors_by_ticker = fetch_prices_and_factors(tickers, args.lookback_days)
 
     print("\nBuilding walk-forward feature/label dataset per ticker (this recomputes rolling "
@@ -407,6 +509,7 @@ def main():
     x_train, y_train, x_val, y_val, x_test, y_test = build_pooled_dataset(
         tickers, prices_by_ticker, volume_by_ticker, factors_by_ticker,
         args.forward_days, args.up_threshold, args.down_threshold, args.label_mode,
+        lookback=args.lookback_days,
     )
     total = len(y_train) + len(y_val) + len(y_test)
     print(f"\nPooled dataset: {total} samples ({len(y_train)} train / {len(y_val)} val / {len(y_test)} test)")

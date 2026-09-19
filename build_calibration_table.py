@@ -34,12 +34,13 @@ import numpy as np
 from walkforward_layer4 import (
     build_full_dataset, make_fold_boundaries, slice_fold, train_fold, evaluate_fold,
 )
+from fold_checkpoint import resolve_fold_result
 
 BUCKET_EDGES = [0.33, 0.40, 0.45, 0.50, 0.55, 0.60, 0.70, 1.01]
 
 
 def collect_all_oos_trades(per_ticker, train_years, test_months, step_months,
-                            hidden_sizes, dropout, weight_decay, lr, batch_size, epochs):
+                            hidden_sizes, dropout, weight_decay, lr, batch_size, epochs, run_config):
     folds = make_fold_boundaries(per_ticker, train_years, test_months, step_months)
     print(f"{len(folds)} rolling folds to collect out-of-sample trades from...")
 
@@ -53,18 +54,29 @@ def collect_all_oos_trades(per_ticker, train_years, test_months, step_months,
         if len(y_train) < 100 or n_test < 20:
             continue
 
-        net, mean, std = train_fold(x_train, y_train, hidden_sizes, dropout, weight_decay, lr, batch_size, epochs)
-        # min_confidence=0.0: record EVERY prediction, unfiltered — the calibration
-        # table needs coverage across the full confidence range, not just the subset
-        # that would have passed should_trade under the OLD (unfixed) glue.
-        _, _, _, _, _, _, trades = evaluate_fold(net, mean, std, test_records, min_confidence=0.0)
+        def compute_this_fold(x_train=x_train, y_train=y_train, test_records=test_records):
+            net, mean, std = train_fold(
+                x_train, y_train, hidden_sizes, dropout, weight_decay, lr, batch_size, epochs,
+            )
+            # min_confidence=0.0: record EVERY prediction, unfiltered — the calibration
+            # table needs coverage across the full confidence range, not just the subset
+            # that would have passed should_trade under the OLD (unfixed) glue.
+            _, _, _, _, _, _, trades = evaluate_fold(net, mean, std, test_records, min_confidence=0.0)
+            return trades
+
+        trades, from_cache = resolve_fold_result("calibtable", run_config, i, compute_this_fold)
         all_trades.extend(trades)
-        print(f"  fold {i}: collected {len(trades)} out-of-sample predictions")
+        cache_note = " (from checkpoint)" if from_cache else ""
+        print(f"  fold {i}: collected {len(trades)} out-of-sample predictions{cache_note}")
 
     return all_trades
 
 
 def build_table(all_trades):
+    # Only "confidence" and "directional_return" are read from each trade dict here —
+    # the pandas Timestamp in trade["date"] never reaches json.dump below. If a future
+    # change starts writing raw trades (not just buckets) to the output JSON, it will
+    # need an explicit str/isoformat conversion for that field.
     confidences = np.array([t["confidence"] for t in all_trades])
     directional_returns = np.array([t["directional_return"] for t in all_trades])
 
@@ -126,9 +138,21 @@ def main():
         args.up_threshold, args.down_threshold,
     )
 
+    run_config = {
+        "tickers": ",".join(sorted(tickers)), "lookback_days": args.lookback_days,
+        "forward_days": args.forward_days, "label_mode": args.label_mode,
+        "up_threshold": args.up_threshold, "down_threshold": args.down_threshold,
+        "train_years": args.train_years, "test_months": args.test_months,
+        "step_months": args.step_months, "min_confidence": 0.0,
+        "hidden_sizes": args.hidden_sizes, "dropout": args.dropout,
+        "weight_decay": args.weight_decay, "lr": args.lr,
+        "batch_size": args.batch_size, "epochs": args.epochs,
+    }
+
     all_trades = collect_all_oos_trades(
         per_ticker, args.train_years, args.test_months, args.step_months,
         hidden_sizes, args.dropout, args.weight_decay, args.lr, args.batch_size, args.epochs,
+        run_config,
     )
     print(f"\nCollected {len(all_trades)} total out-of-sample predictions across all folds.\n")
 
