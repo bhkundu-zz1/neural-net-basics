@@ -1,0 +1,18 @@
+[
+  {
+    "predicted_regime": "Stagnant",
+    "n": 204693,
+    "hit_rate": 0.3891144299023416,
+    "mean_forward_return": 0.004850084670568631,
+    "median_forward_return": 0.0038046055391220968,
+    "confusion_realized_counts": {
+      "Bull": 69031,
+      "Bear": 56013,
+      "Stagnant": 79649
+    },
+    "t_stat": 36.39662152918633,
+    "p_value": 4.081096303765524e-289,
+    "bootstrap_ci_low": 0.00458944552093012,
+    "bootstrap_ci_high": 0.005112902573663555
+  }
+]

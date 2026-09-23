@@ -54,7 +54,7 @@ import yfinance as yf
 
 from layer1 import detect_signal
 from layer2 import factor_decompose
-from layer3 import get_next_regime
+from layer3 import get_next_regime, seed_state_from_prices
 from layer4 import QuantEdgeNet, build_feature_vector
 
 FACTOR_WINDOW = 252     # preferred trailing days for rolling factor betas
@@ -235,8 +235,10 @@ def build_dataset_for_ticker(
         if np.isnan(signal["z_score_latest"]) or np.isnan(signal["hurst_exponent"]):
             continue
 
-        current_state = 0 if signal["regime"] == "trending" else 2
-        regime_probs = get_next_regime(current_state, steps=5)
+        # steps=1: matches pipeline_core.py's live inference — see its comment
+        # for why (steps=5 mixes to a near-constant regime with the fitted matrix).
+        current_state = seed_state_from_prices(price_slice)
+        regime_probs = get_next_regime(current_state, steps=1)
 
         try:
             feature_vector = build_feature_vector(price_slice, volume_slice, factor_result["betas"], regime_probs)

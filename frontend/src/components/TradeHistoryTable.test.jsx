@@ -13,6 +13,9 @@ const trades = [
     resolution_date: null,
     exit_price: null,
     pnl_pct: null,
+    regime: "Stagnant",
+    regime_calibrated: true,
+    regime_hit_rate: 0.4114662096313472,
   },
   {
     _id: "2",
@@ -24,8 +27,12 @@ const trades = [
     resolution_date: "2026-08-10",
     exit_price: 308.26,
     pnl_pct: 0.0108,
+    regime: "Bull",
+    regime_calibrated: true,
+    regime_hit_rate: 0.3794448021750018,
   },
   {
+    // Older trade placed before regime snapshotting existed — fields absent.
     _id: "3",
     ticker: "JPM",
     direction: "short",
@@ -56,5 +63,18 @@ describe("TradeHistoryTable", () => {
 
     expect(screen.getByText("1.08%")).toBeInTheDocument();
     expect(screen.getByText("-0.10%")).toBeInTheDocument();
+  });
+
+  it("shows the regime snapshot captured at entry, and N/A for older trades without one", () => {
+    render(<TradeHistoryTable trades={trades} />);
+
+    expect(screen.getByText("Stagnant")).toBeInTheDocument();
+    expect(screen.getByText("Bull")).toBeInTheDocument();
+    expect(screen.getByText(/Yes \(41\.1%\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Yes \(37\.9%\)/)).toBeInTheDocument();
+
+    // JPM has no regime fields at all — must render N/A and "unvalidated", not throw.
+    expect(screen.getByText("N/A")).toBeInTheDocument();
+    expect(screen.getByText(/No \(unvalidated\)/)).toBeInTheDocument();
   });
 });

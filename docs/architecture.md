@@ -47,6 +47,15 @@ down` start/stop workflow.
    trades, groups them by ticker, fetches each ticker's current
    trading-day-indexed price series, and resolves any trade whose
    `horizon_trading_days` has elapsed into `won`/`lost` with a computed P&L.
+4. **Portfolio signal**: React calls `POST /api/portfolio/signal` with a
+   multipart-uploaded holdings CSV (same `Account Number, Investment Name,
+   Symbol, Shares` schema as `run_portfolio.py`). The backend parses the CSV
+   in memory (`portfolio_glue.parse_portfolio_csv`), dedupes positions by
+   symbol, and runs the pipeline once per distinct ticker
+   (`portfolio_glue.run_portfolio_scan` — the same function `run_portfolio.py`
+   calls, so the CLI tool and this endpoint always agree). Returns a
+   buy/sell/hold verdict and portfolio exposure summary per position; nothing
+   is persisted to CouchDB and no trades are placed.
 
 ## Forward Deployed Engineer (FDE) section
 
@@ -192,8 +201,12 @@ cd regression-test && npx playwright test playwright/
 
 ## Known v1 scope cuts
 
-- No client-side routing (a simple state-based two-view switch instead of
-  react-router) — a deliberate cut for a two-page app.
+- No client-side routing (a simple state-based view switch instead of
+  react-router) — a deliberate cut for a small, three-page app.
+- The portfolio CSV upload is capped at 2MB and parsed entirely in memory
+  (`backend/app/routers/portfolio.py`) — fine for a holdings CSV (typically
+  tens to low hundreds of rows), not designed for bulk/institutional-scale
+  files.
 - Exit-side execution cost is not modeled in trade resolution (only
   entry-side cost, captured at placement) — documented in
   `backend/app/resolution.py`.

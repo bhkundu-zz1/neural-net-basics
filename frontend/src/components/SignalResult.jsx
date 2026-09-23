@@ -48,6 +48,13 @@ export default function SignalResult({ signal }) {
 
         <dt>Regime</dt>
         <dd>{signal.regime_probs?.dominant_regime ?? "N/A"}</dd>
+
+        <dt>Regime calibrated</dt>
+        <dd>
+          {signal.regime_probs?.regime_calibrated
+            ? `Yes (empirical, hit rate ${fmtPct(signal.regime_probs.regime_hit_rate)})`
+            : "No (unvalidated — see docs/pipeline_guide.md)"}
+        </dd>
       </dl>
     </div>
   );

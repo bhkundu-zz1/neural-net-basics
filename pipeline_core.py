@@ -15,7 +15,7 @@ import yfinance as yf
 
 from layer1 import detect_signal
 from layer2 import factor_decompose
-from layer3 import get_next_regime
+from layer3 import get_next_regime, attach_regime_calibration, seed_state_from_prices
 from layer4 import QuantEdgeNet, build_feature_vector
 from layer5 import kelly_position_size, calculate_execution_cost, should_trade
 from trade_glue import build_trade_inputs
@@ -127,9 +127,16 @@ def run_pipeline_for_ticker(
     # Layer 2: factor decomposition
     factor_result = factor_decompose(returns, factor_returns)[ticker]
 
-    # Layer 3: Markov regime — seed current state from layer1's regime call
-    current_state = 0 if signal["regime"] == "trending" else 2
-    regime_probs = get_next_regime(current_state, steps=5)
+    # Layer 3: Markov regime — seed current state from realized trailing price direction.
+    # steps=1, not 5: calibrate_layer3_regime.py found that at steps=5, the fitted
+    # transition matrix mixes close to its stationary distribution regardless of
+    # starting state, making dominant_regime nearly constant (zero discriminative
+    # signal, out-of-sample). At steps=1 it retains weak but real signal — see
+    # docs/pipeline_guide.md's "layer3's regime label carries no signal" section.
+    # regime_calibration_table.json (loaded by attach_regime_calibration below) was
+    # built with this same steps=1, so the reported hit rate matches what's shown.
+    current_state = seed_state_from_prices(prices)
+    regime_probs = get_next_regime(current_state, steps=1)
 
     # Layer 4: neural net edge
     feature_vector = build_feature_vector(prices, volume, factor_result["betas"], regime_probs)
@@ -185,7 +192,11 @@ def run_pipeline_for_ticker(
         "n_factor_rows": len(factor_returns),
         "signal": signal,
         "factor_result": factor_result,
-        "regime_probs": regime_probs,
+        # attach_regime_calibration runs on a COPY, after build_feature_vector
+        # (above) has already consumed the original 3-key regime_probs — see
+        # layer3.py's module docstring for why the extra keys must not reach
+        # the feature vector.
+        "regime_probs": attach_regime_calibration(regime_probs),
         "edge_probs": edge_probs,
         "edge_label": edge_label,
         "trained_tickers": trained_tickers,

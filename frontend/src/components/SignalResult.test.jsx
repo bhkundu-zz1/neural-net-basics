@@ -13,7 +13,7 @@ const fullSignal = {
   position_size: 0.02,
   trade_inputs: { calibrated: true },
   factor_result: { r_squared: 0.674 },
-  regime_probs: { dominant_regime: "Bull" },
+  regime_probs: { dominant_regime: "Bull", regime_calibrated: true, regime_hit_rate: 0.394 },
   edge_label: "trained weights...",
 };
 
@@ -28,7 +28,7 @@ const degenerateSignal = {
   position_size: 0.0,
   trade_inputs: { calibrated: false },
   factor_result: null,
-  regime_probs: { dominant_regime: "undefined" },
+  regime_probs: { dominant_regime: "undefined", regime_calibrated: false, regime_hit_rate: null },
   edge_label: "SKIPPED — no meaningful price variance",
 };
 
@@ -45,6 +45,7 @@ describe("SignalResult", () => {
     expect(screen.getByText("81.0%")).toBeInTheDocument();
     expect(screen.getByText("Bull")).toBeInTheDocument();
     expect(screen.getByText("Yes (empirical)")).toBeInTheDocument();
+    expect(screen.getByText(/Yes \(empirical, hit rate 39\.4%\)/)).toBeInTheDocument();
   });
 
   it("does not crash and shows the skip message for a degenerate signal", () => {
@@ -53,5 +54,6 @@ describe("SignalResult", () => {
     // factor_result is null — must render N/A, not throw
     const dds = screen.getAllByText("N/A");
     expect(dds.length).toBeGreaterThan(0);
+    expect(screen.getByText(/No \(unvalidated/)).toBeInTheDocument();
   });
 });
