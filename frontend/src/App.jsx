@@ -1,5 +1,6 @@
 import { useState } from "react";
 import SignalPage from "./pages/SignalPage";
+import PortfolioPage from "./pages/PortfolioPage";
 import TradeHistoryPage from "./pages/TradeHistoryPage";
 import "./App.css";
 
@@ -17,12 +18,19 @@ export default function App() {
           <button className={view === "signal" ? "active" : ""} onClick={() => setView("signal")}>
             Get Signal
           </button>
+          <button className={view === "portfolio" ? "active" : ""} onClick={() => setView("portfolio")}>
+            Get Signal on Portfolio
+          </button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>
             Trade History
           </button>
         </nav>
       </header>
-      <main>{view === "signal" ? <SignalPage /> : <TradeHistoryPage />}</main>
+      <main>
+        {view === "signal" && <SignalPage />}
+        {view === "portfolio" && <PortfolioPage />}
+        {view === "history" && <TradeHistoryPage />}
+      </main>
     </div>
   );
 }
