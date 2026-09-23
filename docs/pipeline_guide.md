@@ -73,8 +73,13 @@ pipeline needs to produce a verdict.
   market/size/value/momentum factor proxies (SPY/IWM/IWD/MTUM), producing
   alpha, factor betas, and R².
 - **layer3 — Markov Regime**: a 3-state (Bull/Bear/Stagnant) transition-matrix
-  model, seeded from layer1's trending/mean-reverting read, forecasting
-  regime probabilities N steps ahead.
+  model, fitted from realized price transitions (`fit_layer3_transition_matrix.py`)
+  and seeded from realized trailing price direction (`seed_state_from_prices`,
+  not the Hurst exponent), forecasting regime probabilities 1 step ahead.
+  **Empirically checked and found to carry weak but real discriminative
+  signal** — see the "layer3's regime label" bullet under
+  [The limits](#the-limits-read-these-before-trusting-any-output) below
+  before treating `dominant_regime` as more informative than it is.
 - **layer4 — Neural Net Edge**: `QuantEdgeNet`, a small feedforward network
   trained to output long/short/flat probabilities from a feature vector built
   out of layers 1–3's outputs plus raw price/volume technicals (RSI, MACD,
@@ -151,6 +156,39 @@ ticker universes.
   the P&L holds up reasonably well because `should_trade` self-selects away
   from marginal trades as costs rise — but real slippage on a less liquid
   name could still exceed these assumptions.
+- **layer3's regime label carries weak, real signal — but only at steps=1,
+  and only after fixing two v1 bugs.** The original v1 layer3 (hand-typed
+  transition matrix, never fit from data; `current_state` seeded from
+  layer1's Hurst exponent, which measures trend *persistence* not price
+  *direction*, and could never seed Bear at all) was checked with
+  `calibrate_layer3_regime.py` and found to predict `dominant_regime` =
+  **"Bull" 100% of the time**, out-of-sample, across 7,008 calls — a
+  constant, with zero discriminative value (see `regime_calibration_table_steps5_archive.json`
+  for that run's archived numbers). Both root causes are now fixed:
+  `fit_layer3_transition_matrix.py` fits the matrix from realized 124-ticker
+  price transitions (10y history), and `seed_state_from_prices` seeds from
+  realized trailing price direction instead of Hurst. Re-validating the
+  fixed version at `steps=5` (matching `get_next_regime`'s original default)
+  *still* produced a constant — this time "Stagnant" 100% of the time,
+  204,693 calls, 38.9% hit rate — because the fitted matrix mixes close to
+  its stationary distribution well before 5 steps regardless of starting
+  state. Re-validating at **`steps=1`** (the horizon where starting state
+  still visibly matters) finally showed real variation: `dominant_regime`
+  predicts Bull 27% of the time (37.9% hit rate) and Stagnant 73% of the
+  time (41.1% hit rate), both modestly above their respective base rates
+  (~34% and ~39%) — real but weak signal, not strong. **Bear is still never
+  predicted at any step count tried.** `pipeline_core.py`, `train_layer4.py`,
+  and `train_layer4_xsection.py` all now call `get_next_regime(..., steps=1)`
+  to match; `regime_calibration_table.json` (loaded by
+  `layer3.attach_regime_calibration`) reflects this `steps=1` result. The
+  live API/UI (`GET /api/signal/{ticker}` and `POST /api/portfolio/signal`,
+  surfaced as the "Regime calibrated" row in the "Get Signal" result) shows
+  this empirical hit rate directly rather than presenting `dominant_regime`
+  as validated on its own. **Treat it as weak evidence, not a strong
+  signal** — layer4's own validated signal (see [The finding](#the-finding)
+  above) does not depend on layer3's label being strongly informative,
+  since the neural net can (and evidently did, across all prior versions of
+  this feature) learn to work around a weak or uninformative input.
 
 **Bottom line**: treat this pipeline's output as a documented, evidence-based
 research signal worth further investigation (e.g., paper trading forward in
@@ -231,6 +269,8 @@ The scripts behind the numbers above, if you want to reproduce or extend them:
 | `calibrate_layer4.py` | Reliability report: buckets predictions by confidence, checks whether stated confidence matches empirical accuracy. Supports `--tickers`/`--evaluate-all` for out-of-sample checks. |
 | `backtest_layer4.py` | Runs a trained model's predictions through the real layer5 sizing/cost logic, reporting win rate, P&L, and statistical significance (bootstrap CI + t-test). Supports `--cost-multiplier` for cost stress tests and `--tickers`/`--evaluate-all` for out-of-sample tickers. |
 | `build_calibration_table.py` | Builds `calibration_table.json` from pooled walk-forward out-of-sample trades — the empirical data `trade_glue.py` uses in place of hand-picked formulas. |
+| `fit_layer3_transition_matrix.py` | Fits layer3's Bull/Bear/Stagnant transition matrix from realized price transitions, replacing the original hand-typed constant. Writes `layer3_transition_matrix.json`. |
+| `calibrate_layer3_regime.py` (`calibrate_layer3_regime_parallel.py` for a ticker-level-parallel version, same output) | Builds `regime_calibration_table.json`: checks layer3's `dominant_regime` label against realized forward returns, out-of-sample, across rolling folds. Supports `--steps` to check different `get_next_regime` projection horizons — found `steps=5` mixes to a near-constant prediction, `steps=1` retains weak but real signal (see [The limits](#the-limits-read-these-before-trusting-any-output)). |
 
 Example: testing the trained model on a new, never-seen ticker:
 

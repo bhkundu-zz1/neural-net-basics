@@ -45,3 +45,18 @@ export async function resolveTrades() {
   const res = await fetch(`${BASE}/api/trades/resolve`, { method: "POST" });
   return handleResponse(res);
 }
+
+export async function getPortfolioSignal(file, { lookback = "2y", minConfidence = 0.75, maxPortfolioRisk = 1.0 } = {}) {
+  const params = new URLSearchParams({
+    lookback,
+    min_confidence: String(minConfidence),
+    max_portfolio_risk: String(maxPortfolioRisk),
+  });
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${BASE}/api/portfolio/signal?${params}`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse(res);
+}

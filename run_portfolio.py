@@ -28,8 +28,8 @@ import sys
 from datetime import datetime, timezone
 
 import llm_narration
-from pipeline_core import load_model, run_pipeline_for_ticker
-from portfolio_glue import apply_portfolio_exposure_cap, load_portfolio_csv, map_action
+from pipeline_core import load_model
+from portfolio_glue import dedupe_positions, load_portfolio_csv, run_portfolio_scan
 
 # See run_pipeline.py for why: avoids crashing on characters (em-dashes,
 # LLM-generated punctuation, etc.) that a Windows console's default codepage
@@ -83,76 +83,16 @@ def parse_args():
     return parser.parse_args()
 
 
-def dedupe_positions(df):
-    return (
-        df.groupby("Symbol", as_index=False)
-        .agg(
-            shares=("Shares", "sum"),
-            accounts=("Account Number", lambda s: sorted(set(s))),
-        )
-    )
-
-
 def run_portfolio(args):
     df = load_portfolio_csv(args.csv)
     positions = dedupe_positions(df)
 
     net, checkpoint = load_model(args.weights)
-    trained_tickers = checkpoint.get("tickers") if checkpoint else None
 
-    results = []
-    errors = []
-    for _, row in positions.iterrows():
-        ticker = row["Symbol"]
-        try:
-            result = run_pipeline_for_ticker(
-                ticker,
-                shares=int(row["shares"]),
-                lookback=args.lookback_days,
-                weights_path=args.weights,
-                min_confidence=args.min_confidence,
-                net=net,
-                checkpoint=checkpoint,
-            )
-        except Exception as exc:
-            errors.append({"symbol": ticker, "reason": str(exc)})
-            continue
-
-        result["in_training_universe"] = trained_tickers is not None and ticker in trained_tickers
-        result["accounts"] = row["accounts"]
-        result["action"] = map_action(result["should_trade"], result["direction"])
-        if result["action"] != "Buy":
-            # Kelly sizing only means something for a position we're actually
-            # recommending opening; Hold/Sell display 0% rather than the raw
-            # (unused) Kelly fraction the pipeline computed for this ticker.
-            result["position_size"] = 0.0
-        results.append(result)
-
-    buy_positions = [
-        {"ticker": r["ticker"], "position_size": r["position_size"]}
-        for r in results
-        if r["action"] == "Buy"
-    ]
-    scaled_buys, total_buy_before_cap, total_buy_after_cap = apply_portfolio_exposure_cap(
-        buy_positions, max_portfolio_risk=args.max_portfolio_risk
+    return run_portfolio_scan(
+        positions, net, checkpoint, args.weights, args.lookback_days,
+        args.min_confidence, args.max_portfolio_risk,
     )
-    scaled_by_ticker = {p["ticker"]: p for p in scaled_buys}
-    for r in results:
-        scaled = scaled_by_ticker.get(r["ticker"])
-        if scaled is not None:
-            r["position_size"] = scaled["position_size"]
-            r["capped"] = scaled["capped"]
-        else:
-            r["capped"] = False
-
-    total_portfolio_value = sum(r["position_value"] for r in results)
-
-    return results, errors, {
-        "total_portfolio_value": total_portfolio_value,
-        "total_buy_exposure_before_cap": total_buy_before_cap,
-        "total_buy_exposure_after_cap": total_buy_after_cap,
-        "max_portfolio_risk": args.max_portfolio_risk,
-    }
 
 
 def note_for(result: dict) -> str:

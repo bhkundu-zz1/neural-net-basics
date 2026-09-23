@@ -11,8 +11,8 @@ import pipeline_adapter
 import couch_client
 
 
-def _fake_signal(should_trade=True, direction="long"):
-    return {
+def _fake_signal(should_trade=True, direction="long", regime_probs=None):
+    signal = {
         "ticker": "NVDA",
         "shares": 100,
         "last_price": 200.0,
@@ -25,6 +25,9 @@ def _fake_signal(should_trade=True, direction="long"):
         "trade_inputs": {"calibrated": True},
         "should_trade": should_trade,
     }
+    if regime_probs is not None:
+        signal["regime_probs"] = regime_probs
+    return signal
 
 
 def test_build_trade_document_reads_forward_days_from_checkpoint(monkeypatch):
@@ -51,6 +54,29 @@ def test_build_trade_document_falls_back_to_default_horizon_when_no_checkpoint(m
     )
 
     assert doc["horizon_trading_days"] == trades_module.DEFAULT_HORIZON_TRADING_DAYS
+
+
+def test_build_trade_document_captures_regime_snapshot(monkeypatch):
+    monkeypatch.setattr(trades_module, "_last_trading_date", lambda ticker: "2026-01-05")
+
+    signal = _fake_signal(regime_probs={
+        "dominant_regime": "Stagnant", "regime_calibrated": True, "regime_hit_rate": 0.4114662096313472,
+    })
+    doc = trades_module.build_trade_document(signal, "NVDA", 100, 0.75, "weights.pt", None)
+
+    assert doc["regime"] == "Stagnant"
+    assert doc["regime_calibrated"] is True
+    assert doc["regime_hit_rate"] == pytest.approx(0.4114662096313472)
+
+
+def test_build_trade_document_regime_defaults_when_signal_has_no_regime_probs(monkeypatch):
+    monkeypatch.setattr(trades_module, "_last_trading_date", lambda ticker: "2026-01-05")
+
+    doc = trades_module.build_trade_document(_fake_signal(), "NVDA", 100, 0.75, "weights.pt", None)
+
+    assert doc["regime"] is None
+    assert doc["regime_calibrated"] is False
+    assert doc["regime_hit_rate"] is None
 
 
 def test_place_trade_persists_when_should_trade_true(fake_db, monkeypatch):

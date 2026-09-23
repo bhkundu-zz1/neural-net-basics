@@ -5,6 +5,20 @@
   font-family: system-ui, sans-serif;
 }
 
+button {
+  color: #000;
+  background: #f5f5f5;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  color: #888;
+  cursor: not-allowed;
+}
+
 header .disclaimer {
   color: #b45309;
   font-size: 0.85rem;
@@ -20,6 +34,7 @@ nav button {
   padding: 0.5rem 1rem;
   border: 1px solid #ccc;
   background: #f5f5f5;
+  color: #000;
   cursor: pointer;
 }
 
@@ -115,5 +130,58 @@ nav button.active {
 
 .status-lost {
   background: #fee2e2;
+  color: #b91c1c;
+}
+
+.portfolio-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.portfolio-result-table th,
+.portfolio-result-table td {
+  border: 1px solid #e5e5e5;
+  padding: 0.5rem;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.action-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.action-buy {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.action-sell {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.action-hold {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.portfolio-summary {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 0.4rem 1rem;
+  margin-top: 1rem;
+}
+
+.portfolio-summary dt {
+  font-weight: 600;
+  color: #555;
+}
+
+.portfolio-errors {
+  margin-top: 1rem;
   color: #b91c1c;
 }

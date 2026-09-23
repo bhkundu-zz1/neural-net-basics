@@ -11,3 +11,4 @@ fastapi
 uvicorn[standard]
 httpx
 cloudant
+python-multipart

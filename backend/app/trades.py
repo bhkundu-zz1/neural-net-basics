@@ -30,6 +30,7 @@ def _last_trading_date(ticker: str) -> str:
 def build_trade_document(signal: dict, ticker: str, shares: int, min_confidence: float,
                           weights_path: str, checkpoint: dict | None) -> dict:
     horizon = checkpoint.get("forward_days", DEFAULT_HORIZON_TRADING_DAYS) if checkpoint else DEFAULT_HORIZON_TRADING_DAYS
+    regime_probs = signal.get("regime_probs") or {}
 
     return {
         "_id": str(uuid.uuid4()),
@@ -47,6 +48,15 @@ def build_trade_document(signal: dict, ticker: str, shares: int, min_confidence:
         "edge_bps": signal["edge_bps"],
         "execution_cost_bps": signal["execution_cost_bps"],
         "horizon_trading_days": horizon,
+        # Frozen snapshot of layer3's regime call at placement time — same
+        # rationale as win_probability/calibrated above: a trade's record
+        # should reflect what was known when it was placed, not whatever
+        # regime_calibration_table.json says today (it can be refit later,
+        # e.g. after fit_layer3_transition_matrix.py reruns, which must not
+        # retroactively change what an already-placed trade appears to show).
+        "regime": regime_probs.get("dominant_regime"),
+        "regime_calibrated": regime_probs.get("regime_calibrated", False),
+        "regime_hit_rate": regime_probs.get("regime_hit_rate"),
         "status": "open",
         "placed_at": datetime.now(timezone.utc).isoformat(),
         "resolution_date": None,

@@ -37,6 +37,9 @@ class TradeDocument(BaseModel):
     edge_bps: float
     execution_cost_bps: float
     horizon_trading_days: int
+    regime: Optional[str] = None
+    regime_calibrated: bool = False
+    regime_hit_rate: Optional[float] = None
     status: str
     placed_at: str
     resolution_date: Optional[str] = None
@@ -51,3 +54,9 @@ class ResolveResponse(BaseModel):
     resolved: list[dict]
     still_pending: list[dict]
     errors: list[dict]
+
+
+class PortfolioSignalResponse(BaseModel):
+    positions: list[dict]
+    errors: list[dict]
+    summary: dict

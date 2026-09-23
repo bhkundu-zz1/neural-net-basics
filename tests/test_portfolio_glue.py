@@ -3,7 +3,15 @@ import io
 import pandas as pd
 import pytest
 
-from portfolio_glue import apply_portfolio_exposure_cap, load_portfolio_csv, map_action
+import pipeline_core
+from portfolio_glue import (
+    apply_portfolio_exposure_cap,
+    dedupe_positions,
+    load_portfolio_csv,
+    map_action,
+    parse_portfolio_csv,
+    run_portfolio_scan,
+)
 
 
 def test_load_portfolio_csv_drops_trailing_unnamed_column():
@@ -73,3 +81,95 @@ def test_apply_portfolio_exposure_cap_empty_list():
 )
 def test_map_action(should_trade, direction, expected):
     assert map_action(should_trade, direction) == expected
+
+
+def test_parse_portfolio_csv_from_bytes_matches_load_from_path():
+    csv_text = "Account Number,Investment Name,Symbol,Shares\nabcd001,NVIDIA CORP,nvda,10\n"
+    df = parse_portfolio_csv(csv_text.encode("utf-8"))
+    assert df.loc[0, "Symbol"] == "NVDA"
+    assert df.loc[0, "Shares"] == 10
+
+
+def test_dedupe_positions_sums_shares_and_collects_accounts():
+    df = pd.DataFrame({
+        "Account Number": ["a1", "a2"],
+        "Investment Name": ["NVIDIA CORP", "NVIDIA CORP"],
+        "Symbol": ["NVDA", "NVDA"],
+        "Shares": [10, 5],
+    })
+    positions = dedupe_positions(df)
+    assert len(positions) == 1
+    assert positions.loc[0, "shares"] == 15
+    assert positions.loc[0, "accounts"] == ["a1", "a2"]
+
+
+def _fake_pipeline_result(ticker, shares, direction, should_trade, position_size=0.1):
+    return {
+        "ticker": ticker,
+        "shares": shares,
+        "last_price": 100.0,
+        "position_value": shares * 100.0,
+        "direction": direction,
+        "win_probability": 0.8,
+        "position_size": position_size,
+        "should_trade": should_trade,
+    }
+
+
+def test_run_portfolio_scan_maps_actions_and_caps_exposure(monkeypatch):
+    def fake_run_pipeline_for_ticker(ticker, shares, lookback, weights_path, min_confidence, net, checkpoint):
+        if ticker == "NVDA":
+            return _fake_pipeline_result(ticker, shares, "long", True, position_size=0.6)
+        if ticker == "AMD":
+            return _fake_pipeline_result(ticker, shares, "long", True, position_size=0.6)
+        return _fake_pipeline_result(ticker, shares, "short", False, position_size=0.3)
+
+    monkeypatch.setattr(pipeline_core, "run_pipeline_for_ticker", fake_run_pipeline_for_ticker)
+
+    positions = pd.DataFrame({
+        "Symbol": ["NVDA", "AMD", "MSFT"],
+        "shares": [10, 20, 5],
+        "accounts": [["a1"], ["a1"], ["a1"]],
+    })
+
+    results, errors, summary = run_portfolio_scan(
+        positions, net=None, checkpoint=None, weights_path="weights.pt",
+        lookback="2y", min_confidence=0.75, max_portfolio_risk=1.0,
+    )
+
+    assert errors == []
+    actions = {r["ticker"]: r["action"] for r in results}
+    assert actions == {"NVDA": "Buy", "AMD": "Buy", "MSFT": "Hold"}
+
+    msft = next(r for r in results if r["ticker"] == "MSFT")
+    assert msft["position_size"] == 0.0  # Hold positions are zeroed out
+
+    # NVDA + AMD sum to 1.2 > max_portfolio_risk=1.0, so both get scaled down
+    assert summary["total_buy_exposure_before_cap"] == pytest.approx(1.2)
+    assert summary["total_buy_exposure_after_cap"] == pytest.approx(1.0)
+    assert all(r["capped"] for r in results if r["action"] == "Buy")
+
+
+def test_run_portfolio_scan_collects_errors_without_failing_other_tickers(monkeypatch):
+    def fake_run_pipeline_for_ticker(ticker, shares, lookback, weights_path, min_confidence, net, checkpoint):
+        if ticker == "BADTICKER":
+            raise ValueError("no data found")
+        return _fake_pipeline_result(ticker, shares, "long", True)
+
+    monkeypatch.setattr(pipeline_core, "run_pipeline_for_ticker", fake_run_pipeline_for_ticker)
+
+    positions = pd.DataFrame({
+        "Symbol": ["NVDA", "BADTICKER"],
+        "shares": [10, 5],
+        "accounts": [["a1"], ["a1"]],
+    })
+
+    results, errors, summary = run_portfolio_scan(
+        positions, net=None, checkpoint=None, weights_path="weights.pt",
+        lookback="2y", min_confidence=0.75,
+    )
+
+    assert len(results) == 1
+    assert results[0]["ticker"] == "NVDA"
+    assert len(errors) == 1
+    assert errors[0]["symbol"] == "BADTICKER"

@@ -28,7 +28,7 @@ if os.path.dirname(__file__) not in sys.path:
 import pipeline_core
 import config
 import couch_client
-from routers import signals, trades
+from routers import portfolio, signals, trades
 
 
 @asynccontextmanager
@@ -57,3 +57,4 @@ app.add_middleware(
 
 app.include_router(signals.router)
 app.include_router(trades.router)
+app.include_router(portfolio.router)
